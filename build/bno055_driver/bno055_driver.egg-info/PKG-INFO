@@ -1,0 +1,8 @@
+Metadata-Version: 2.1
+Name: bno055-driver
+Version: 1.0.0
+Summary: ROS2 driver for BNO055 IMU via Arduino Uno USB serial bridge
+Maintainer: juza
+Maintainer-email: antonyjuza@gmail.com
+License: MIT
+Provides-Extra: test

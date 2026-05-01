@@ -1,0 +1,2 @@
+[console_scripts]
+bno055_node = bno055_driver.bno055_node:main
