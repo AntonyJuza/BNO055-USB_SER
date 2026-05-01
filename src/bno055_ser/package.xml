@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>bno055_driver</name>
+  <name>bno055_ser</name>
   <version>1.0.0</version>
   <description>ROS2 driver for BNO055 IMU via Arduino Uno USB serial bridge</description>
   <maintainer email="antonyjuza@gmail.com">juza</maintainer>

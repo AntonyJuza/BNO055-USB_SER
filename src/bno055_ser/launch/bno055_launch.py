@@ -10,13 +10,13 @@ from launch_ros.actions import Node
 def generate_launch_description():
     # Get the config file path
     config_file = os.path.join(
-        get_package_share_directory('bno055_driver'),
+        get_package_share_directory('bno055_ser'),
         'config',
         'bno055_params.yaml'
     )
 
     bno055_node = Node(
-        package='bno055_driver',
+        package='bno055_ser',
         executable='bno055_node',
         name='bno055_node',
         output='screen',

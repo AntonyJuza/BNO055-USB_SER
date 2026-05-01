@@ -2,7 +2,7 @@ import os
 from glob import glob
 from setuptools import find_packages, setup
 
-package_name = 'bno055_driver'
+package_name = 'bno055_ser'
 
 setup(
     name=package_name,
@@ -35,7 +35,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'bno055_node = bno055_driver.bno055_node:main',
+            'bno055_node = bno055_ser.bno055_node:main',
         ],
     },
 )
