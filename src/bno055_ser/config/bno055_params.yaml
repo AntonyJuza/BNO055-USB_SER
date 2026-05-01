@@ -1,6 +1,86 @@
+# BNO055 Serial IMU Driver — Default Parameters
+# For Arduino Uno connected to Linux host via USB
+#
+# Usage:
+#   ros2 launch bno055_ser bno055_launch.py
+#   ros2 run bno055_ser bno055_node --ros-args --params-file config/bno055_params.yaml
+
 bno055_node:
   ros__parameters:
+
+    # ── Serial Configuration ───────────────────────────────────────────────
+    # Use 'ls /dev/ttyUSB*' or 'ls /dev/ttyACM*' to identify the port
     serial_port: "/dev/ttyUSB0"
     baud_rate: 115200
+
+    # ── ROS2 Configuration ─────────────────────────────────────────────────
+    # TF frame ID — must match the URDF link name
     frame_id: "bno055_link"
-  
+
+    # Polling rate in Hz (governs how often the serial buffer is read)
+    # 50 Hz is a good balance for CPU load and SLAM accuracy
+    update_rate: 50.0
+
+    # ── Sensor Configuration ───────────────────────────────────────────────
+    # Operation modes (BNO055 Datasheet Section 3.3):
+    #
+    # ┌────────────────────────────────────────────────────────────────────────┐
+    # │  NON-FUSION MODES  (raw sensor data, no orientation output)           │
+    # ├──────────────┬─────────────────────────────────────────────────────────┤
+    # │ "ACCONLY"    │ Accelerometer only                                      │
+    # │ "MAGONLY"    │ Magnetometer only                                       │
+    # │ "GYROONLY"   │ Gyroscope only                                          │
+    # │ "ACCMAG"     │ Accelerometer + Magnetometer                            │
+    # │ "ACCGYRO"    │ Accelerometer + Gyroscope                               │
+    # │ "MAGGYRO"    │ Magnetometer + Gyroscope                                │
+    # │ "AMG"        │ All three sensors, no fusion                            │
+    # ├────────────────────────────────────────────────────────────────────────┤
+    # │  FUSION MODES  (on-chip sensor fusion: quaternion, euler, lin-accel)  │
+    # ├──────────────┬─────────────────────────────────────────────────────────┤
+    # │ "IMU"        │ Accel + Gyro relative fusion (no magnetometer)          │
+    # │ "IMUPLUS"    │ Alias for "IMU" — same register value (0x08)            │
+    # │ "COMPASS"    │ Accel + Mag fusion (heading only)                       │
+    # │ "M4G"        │ Mag for Gyro — uses mag instead of gyro for rotation    │
+    # │ "NDOF_FMC_OFF"│ Full 9-axis fusion, fast mag calibration disabled      │
+    # │ "NDOF"       │ Full 9-axis fusion — best for SLAM                      │
+    # └──────────────┴─────────────────────────────────────────────────────────┘
+    #
+    # Recommendations:
+    #   SLAM/Navigation      → "NDOF"    (absolute heading via magnetometer)
+    #   Indoor/no-mag env    → "IMU"     (relative orientation, no mag interference)
+    #   Raw data logging     → "AMG"     (all sensors, no fusion overhead)
+    #   Compass heading only → "COMPASS" (tilt-compensated heading)
+    #
+    operation_mode: "NDOF"
+
+    # ── Feature Toggles ────────────────────────────────────────────────────
+    # Publish calibration diagnostics on /bno055/status (1 Hz)
+    publish_diagnostics: true
+
+    # Publish chip temperature on /bno055/temperature
+    publish_temperature: true
+
+    # Publish magnetometer data on /bno055/mag
+    # Only has effect when the selected mode uses the magnetometer
+    publish_magnetometer: true
+
+    # ── Axis Remap (Mounting Orientation) ──────────────────────────────────
+    # Informational — the actual axis remap must be set in the Arduino sketch
+    # (bno055_serial.ino → bno.setAxisRemap / bno.setAxisSign).
+    # Used for diagnostics display only.
+    #
+    #   P0 — Chip facing up, connector at right  (POR default)
+    #   P1 — Chip facing up, connector at left   (BNO055 config default)
+    #   P2 — Chip facing up, connector at bottom
+    #   P3 — Chip facing up, connector at top
+    #   P4 — Chip facing DOWN (upside-down mounting)
+    #   P5 — Rotated 90° CW
+    #   P6 — Rotated 180°
+    #   P7 — Rotated 270° CW
+    #
+    placement_axis_remap: "P1"
+
+    # ── Calibration Persistence ────────────────────────────────────────────
+    # Path where calibration offsets are saved after full calibration.
+    # Offsets are automatically sent to the Arduino on next startup.
+    cal_file: "~/.ros/bno055_cal.json"

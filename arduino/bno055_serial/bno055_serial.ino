@@ -2,29 +2,28 @@
  * BNO055 IMU Serial Driver for Arduino Uno
  *
  * Reads BNO055 sensor data over I2C and sends it via USB serial
- * to be consumed by a ROS2 node on Raspberry Pi 4.
+ * to be consumed by a ROS2 node on Raspberry Pi / Linux host.
  *
  * Wiring (BNO055 -> Arduino Uno):
- *   VIN -> 5V
- *   GND -> GND
- *   SDA -> A4
- *   SCL -> A5
+ *   VIN -> 5V  |  GND -> GND  |  SDA -> A4  |  SCL -> A5
  *
- * Serial Protocol (115200 baud):
- *   HOST -> ARDUINO:
- *     LOAD_CAL,accel_off_x,accel_off_y,accel_off_z,
- *              mag_off_x,mag_off_y,mag_off_z,
- *              gyro_off_x,gyro_off_y,gyro_off_z,
- *              accel_radius,mag_radius
+ * ─────────────────── Serial Protocol (115200 baud) ────────────────────────
  *
- *   ARDUINO -> HOST:
- *     BNO,qw,qx,qy,qz,gx,gy,gz,ax,ay,az,cal_sys,cal_gyro,cal_accel,cal_mag
- *     CAL_STATUS,sys,gyro,accel,mag
- *     CAL_COMPLETE
- *     CAL_OFFSETS,accel_off_x,accel_off_y,accel_off_z,
- *                 mag_off_x,mag_off_y,mag_off_z,
- *                 gyro_off_x,gyro_off_y,gyro_off_z,
- *                 accel_radius,mag_radius
+ *  HOST → ARDUINO:
+ *    LOAD_CAL,accel_off_x,accel_off_y,accel_off_z,
+ *             mag_off_x,mag_off_y,mag_off_z,
+ *             gyro_off_x,gyro_off_y,gyro_off_z,
+ *             accel_radius,mag_radius
+ *
+ *  ARDUINO → HOST:
+ *    BNO,qw,qx,qy,qz,gx,gy,gz,ax,ay,az,mx,my,mz,ex,ey,ez,temp,
+ *        cal_sys,cal_gyro,cal_accel,cal_mag
+ *       (22 fields total, index 0 = "BNO")
+ *
+ *    CAL_STATUS,sys,gyro,accel,mag
+ *    CAL_COMPLETE
+ *    CAL_OFFSETS,ax,ay,az,mx,my,mz,gx,gy,gz,accel_radius,mag_radius
+ *    CAL_LOADED
  *
  * Libraries required:
  *   - Adafruit BNO055
@@ -40,7 +39,7 @@
 Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x28);
 
 // Timing
-const unsigned long SEND_INTERVAL_MS = 20; // ~50 Hz
+const unsigned long SEND_INTERVAL_MS = 20;  // ~50 Hz
 unsigned long lastSendTime = 0;
 
 // Calibration tracking
@@ -69,16 +68,13 @@ void broadcastOffsets() {
 
 bool applyOffsetsFromSerial(String line) {
   // Expected: LOAD_CAL,ax,ay,az,mx,my,mz,gx,gy,gz,ar,mr
-  int idx = 0;
   int parts[11];
-  String token;
-  int start = line.indexOf(',') + 1; // skip "LOAD_CAL"
+  int start = line.indexOf(',') + 1;  // skip "LOAD_CAL"
 
   for (int i = 0; i < 11; i++) {
     int comma = line.indexOf(',', start);
     if (comma == -1) comma = line.length();
-    token = line.substring(start, comma);
-    parts[i] = token.toInt();
+    parts[i] = line.substring(start, comma).toInt();
     start = comma + 1;
   }
 
@@ -104,24 +100,17 @@ bool applyOffsetsFromSerial(String line) {
 
 void setup() {
   Serial.begin(115200);
+  while (!Serial) { delay(10); }
 
-  // Wait for serial connection
-  while (!Serial) {
-    delay(10);
-  }
-
-  Serial.println("BNO055 IMU Serial Driver");
-  Serial.println("========================");
+  Serial.println("BNO055 IMU Serial Driver v2");
+  Serial.println("============================");
   Serial.println("Initializing BNO055...");
 
-  // Initialize BNO055 in CONFIG mode so offsets can be written before NDOF
+  // Start in CONFIG mode so stored offsets can be written before NDOF
   if (!bno.begin(OPERATION_MODE_CONFIG)) {
     Serial.println("BNO_ERROR");
     Serial.println("ERROR: No BNO055 detected. Check wiring:");
-    Serial.println("  VIN -> 5V");
-    Serial.println("  GND -> GND");
-    Serial.println("  SDA -> A4");
-    Serial.println("  SCL -> A5");
+    Serial.println("  VIN -> 5V | GND -> GND | SDA -> A4 | SCL -> A5");
     while (1) {
       delay(1000);
       if (bno.begin(OPERATION_MODE_CONFIG)) {
@@ -140,8 +129,8 @@ void setup() {
   bno.getSensor(&sensor);
   Serial.print("Sensor: ");    Serial.println(sensor.name);
   Serial.print("Driver Ver: "); Serial.println(sensor.version);
-
   Serial.println("");
+
   Serial.println("=== CALIBRATION GUIDE ===");
   Serial.println("Gyroscope:     Place sensor still on flat surface");
   Serial.println("Accelerometer: Rotate sensor to 6 positions (each axis up/down)");
@@ -151,10 +140,10 @@ void setup() {
   Serial.println("=========================");
   Serial.println("");
 
-  // Signal ROS2 node we are ready and waiting for optional offset restore
+  // Signal ROS2 node: ready and waiting for optional offset restore
   Serial.println("BNO_READY");
 
-  // Wait up to 3 seconds for the host to send stored offsets
+  // Wait up to 3 s for host to send stored calibration offsets
   unsigned long waitStart = millis();
   bool offsetsLoaded = false;
   while (millis() - waitStart < 3000) {
@@ -165,7 +154,7 @@ void setup() {
         offsetsLoaded = applyOffsetsFromSerial(line);
         if (offsetsLoaded) {
           Serial.println("Offsets restored from host.");
-          fullyCalibrated = true; // treat as pre-calibrated
+          fullyCalibrated = true;
         }
         break;
       }
@@ -185,7 +174,7 @@ void setup() {
 // ─── Loop ────────────────────────────────────────────────────────────────────
 
 void loop() {
-  // Handle any incoming commands from host
+  // Handle runtime commands from host
   if (Serial.available()) {
     String line = Serial.readStringUntil('\n');
     line.trim();
@@ -195,73 +184,83 @@ void loop() {
   }
 
   unsigned long currentTime = millis();
+  if (currentTime - lastSendTime < SEND_INTERVAL_MS) return;
+  lastSendTime = currentTime;
 
-  if (currentTime - lastSendTime >= SEND_INTERVAL_MS) {
-    lastSendTime = currentTime;
+  // ── Calibration ──────────────────────────────────────────────────────────
+  uint8_t calSys, calGyro, calAccel, calMag;
+  bno.getCalibration(&calSys, &calGyro, &calAccel, &calMag);
 
-    // Read calibration status
-    uint8_t calSys, calGyro, calAccel, calMag;
-    bno.getCalibration(&calSys, &calGyro, &calAccel, &calMag);
+  if (calSys != prevCalSys || calGyro != prevCalGyro ||
+      calAccel != prevCalAccel || calMag != prevCalMag) {
 
-    // Report calibration changes
-    if (calSys != prevCalSys || calGyro != prevCalGyro ||
-        calAccel != prevCalAccel || calMag != prevCalMag) {
-      Serial.print("CAL_STATUS,");
-      Serial.print(calSys);   Serial.print(",");
-      Serial.print(calGyro);  Serial.print(",");
-      Serial.print(calAccel); Serial.print(",");
-      Serial.println(calMag);
-
-      prevCalSys   = calSys;
-      prevCalGyro  = calGyro;
-      prevCalAccel = calAccel;
-      prevCalMag   = calMag;
-
-      // When fully calibrated, broadcast offsets for the host to persist
-      if (calSys == 3 && calGyro == 3 && calAccel == 3 && calMag == 3) {
-        if (!fullyCalibrated) {
-          Serial.println("CAL_COMPLETE");
-          broadcastOffsets();
-          fullyCalibrated = true;
-        }
-      } else {
-        fullyCalibrated = false;
-      }
-    }
-
-    // Read quaternion orientation (fused output)
-    imu::Quaternion quat = bno.getQuat();
-
-    // Read angular velocity (gyroscope) in rad/s
-    imu::Vector<3> gyro = bno.getVector(Adafruit_BNO055::VECTOR_GYROSCOPE);
-
-    // Read linear acceleration (without gravity) in m/s^2
-    imu::Vector<3> accel = bno.getVector(Adafruit_BNO055::VECTOR_LINEARACCEL);
-
-    // Send data as CSV line
-    // Format: BNO,qw,qx,qy,qz,gx,gy,gz,ax,ay,az,cal_sys,cal_gyro,cal_accel,cal_mag
-    Serial.print("BNO,");
-
-    // Quaternion (w, x, y, z)
-    Serial.print(quat.w(), 4); Serial.print(",");
-    Serial.print(quat.x(), 4); Serial.print(",");
-    Serial.print(quat.y(), 4); Serial.print(",");
-    Serial.print(quat.z(), 4); Serial.print(",");
-
-    // Gyroscope (rad/s)
-    Serial.print(gyro.x(), 4); Serial.print(",");
-    Serial.print(gyro.y(), 4); Serial.print(",");
-    Serial.print(gyro.z(), 4); Serial.print(",");
-
-    // Linear acceleration (m/s^2)
-    Serial.print(accel.x(), 4); Serial.print(",");
-    Serial.print(accel.y(), 4); Serial.print(",");
-    Serial.print(accel.z(), 4); Serial.print(",");
-
-    // Calibration status
+    Serial.print("CAL_STATUS,");
     Serial.print(calSys);   Serial.print(",");
     Serial.print(calGyro);  Serial.print(",");
     Serial.print(calAccel); Serial.print(",");
     Serial.println(calMag);
+
+    prevCalSys   = calSys;
+    prevCalGyro  = calGyro;
+    prevCalAccel = calAccel;
+    prevCalMag   = calMag;
+
+    if (calSys == 3 && calGyro == 3 && calAccel == 3 && calMag == 3) {
+      if (!fullyCalibrated) {
+        Serial.println("CAL_COMPLETE");
+        broadcastOffsets();
+        fullyCalibrated = true;
+      }
+    } else {
+      fullyCalibrated = false;
+    }
   }
+
+  // ── Fusion data ───────────────────────────────────────────────────────────
+  imu::Quaternion quat  = bno.getQuat();
+  imu::Vector<3>  gyro  = bno.getVector(Adafruit_BNO055::VECTOR_GYROSCOPE);
+  imu::Vector<3>  accel = bno.getVector(Adafruit_BNO055::VECTOR_LINEARACCEL);
+  imu::Vector<3>  mag   = bno.getVector(Adafruit_BNO055::VECTOR_MAGNETOMETER);
+  imu::Vector<3>  euler = bno.getVector(Adafruit_BNO055::VECTOR_EULER);
+  int8_t          temp  = bno.getTemp();
+
+  // ── CSV data line ─────────────────────────────────────────────────────────
+  // Format: BNO,qw,qx,qy,qz,gx,gy,gz,ax,ay,az,mx,my,mz,ex,ey,ez,temp,
+  //             cal_sys,cal_gyro,cal_accel,cal_mag    (22 fields)
+  Serial.print("BNO,");
+
+  // Quaternion (w, x, y, z)
+  Serial.print(quat.w(), 4); Serial.print(",");
+  Serial.print(quat.x(), 4); Serial.print(",");
+  Serial.print(quat.y(), 4); Serial.print(",");
+  Serial.print(quat.z(), 4); Serial.print(",");
+
+  // Gyroscope (rad/s)
+  Serial.print(gyro.x(), 4); Serial.print(",");
+  Serial.print(gyro.y(), 4); Serial.print(",");
+  Serial.print(gyro.z(), 4); Serial.print(",");
+
+  // Linear acceleration (m/s²)
+  Serial.print(accel.x(), 4); Serial.print(",");
+  Serial.print(accel.y(), 4); Serial.print(",");
+  Serial.print(accel.z(), 4); Serial.print(",");
+
+  // Magnetometer (µT)
+  Serial.print(mag.x(), 2); Serial.print(",");
+  Serial.print(mag.y(), 2); Serial.print(",");
+  Serial.print(mag.z(), 2); Serial.print(",");
+
+  // Euler angles (heading, roll, pitch in degrees)
+  Serial.print(euler.x(), 2); Serial.print(",");
+  Serial.print(euler.y(), 2); Serial.print(",");
+  Serial.print(euler.z(), 2); Serial.print(",");
+
+  // Temperature (°C)
+  Serial.print(temp); Serial.print(",");
+
+  // Calibration status
+  Serial.print(calSys);   Serial.print(",");
+  Serial.print(calGyro);  Serial.print(",");
+  Serial.print(calAccel); Serial.print(",");
+  Serial.println(calMag);
 }
