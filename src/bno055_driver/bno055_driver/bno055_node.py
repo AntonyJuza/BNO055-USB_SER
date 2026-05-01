@@ -143,11 +143,12 @@ class BNO055Node(Node):
             elif not line.startswith('BNO'):
                 self.get_logger().debug(f'Arduino: {line}')
 
-        except SerialException as e:
+        except (SerialException, OSError) as e:
             self.get_logger().error(f'Serial read error: {e}')
             self.connected = False
         except Exception as e:
             self.get_logger().error(f'Unexpected error: {e}')
+            self.connected = False
 
     def parse_and_publish_imu(self, line):
         """Parse CSV IMU data and publish as sensor_msgs/Imu."""
