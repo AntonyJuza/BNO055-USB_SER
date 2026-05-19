@@ -14,6 +14,7 @@
  *             mag_off_x,mag_off_y,mag_off_z,
  *             gyro_off_x,gyro_off_y,gyro_off_z,
  *             accel_radius,mag_radius
+ *    SET_MODE,IMU|NDOF|NDOF_FMC_OFF|COMPASS|M4G|GYROONLY|ACCGYRO|AMG
  *
  *  ARDUINO → HOST:
  *    BNO,qw,qx,qy,qz,gx,gy,gz,ax,ay,az,mx,my,mz,ex,ey,ez,temp,
@@ -45,6 +46,7 @@ unsigned long lastSendTime = 0;
 // Calibration tracking
 uint8_t prevCalSys = 0, prevCalGyro = 0, prevCalAccel = 0, prevCalMag = 0;
 bool fullyCalibrated = false;
+adafruit_bno055_opmode_t selectedMode = OPERATION_MODE_NDOF;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -96,6 +98,51 @@ bool applyOffsetsFromSerial(String line) {
   return true;
 }
 
+adafruit_bno055_opmode_t modeFromString(String mode) {
+  mode.trim();
+  mode.toUpperCase();
+
+  if (mode == "IMU" || mode == "IMUPLUS") {
+    return OPERATION_MODE_IMUPLUS;
+  }
+  if (mode == "NDOF") {
+    return OPERATION_MODE_NDOF;
+  }
+  if (mode == "NDOF_FMC_OFF") {
+    return OPERATION_MODE_NDOF_FMC_OFF;
+  }
+  if (mode == "COMPASS") {
+    return OPERATION_MODE_COMPASS;
+  }
+  if (mode == "M4G") {
+    return OPERATION_MODE_M4G;
+  }
+  if (mode == "GYROONLY") {
+    return OPERATION_MODE_GYRONLY;
+  }
+  if (mode == "ACCGYRO") {
+    return OPERATION_MODE_ACCGYRO;
+  }
+  if (mode == "AMG") {
+    return OPERATION_MODE_AMG;
+  }
+
+  return OPERATION_MODE_NDOF;
+}
+
+bool applyModeFromSerial(String line) {
+  int comma = line.indexOf(',');
+  if (comma == -1) {
+    return false;
+  }
+
+  String mode = line.substring(comma + 1);
+  selectedMode = modeFromString(mode);
+  Serial.print("MODE_SET,");
+  Serial.println(mode);
+  return true;
+}
+
 // ─── Setup ───────────────────────────────────────────────────────────────────
 
 void setup() {
@@ -143,7 +190,7 @@ void setup() {
   // Signal ROS2 node: ready and waiting for optional offset restore
   Serial.println("BNO_READY");
 
-  // Wait up to 3 s for host to send stored calibration offsets
+  // Wait up to 3 s for host to send stored calibration offsets and mode
   unsigned long waitStart = millis();
   bool offsetsLoaded = false;
   while (millis() - waitStart < 3000) {
@@ -156,7 +203,8 @@ void setup() {
           Serial.println("Offsets restored from host.");
           fullyCalibrated = true;
         }
-        break;
+      } else if (line.startsWith("SET_MODE,")) {
+        applyModeFromSerial(line);
       }
     }
     delay(10);
@@ -166,8 +214,8 @@ void setup() {
     Serial.println("No stored offsets — starting fresh calibration.");
   }
 
-  // Switch to full NDOF fusion mode
-  bno.setMode(OPERATION_MODE_NDOF);
+  // Switch to requested operation mode
+  bno.setMode(selectedMode);
   delay(100);
 }
 
@@ -180,6 +228,12 @@ void loop() {
     line.trim();
     if (line.startsWith("LOAD_CAL,")) {
       applyOffsetsFromSerial(line);
+    } else if (line.startsWith("SET_MODE,")) {
+      bno.setMode(OPERATION_MODE_CONFIG);
+      delay(25);
+      applyModeFromSerial(line);
+      bno.setMode(selectedMode);
+      delay(25);
     }
   }
 

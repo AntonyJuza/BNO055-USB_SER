@@ -15,7 +15,7 @@ bno055_node:
 
     # ── ROS2 Configuration ─────────────────────────────────────────────────
     # TF frame ID — must match the URDF link name
-    frame_id: "bno055_link"
+    frame_id: "imu_link"
 
     # Polling rate in Hz (governs how often the serial buffer is read)
     # 50 Hz is a good balance for CPU load and SLAM accuracy
@@ -51,7 +51,7 @@ bno055_node:
     #   Raw data logging     → "AMG"     (all sensors, no fusion overhead)
     #   Compass heading only → "COMPASS" (tilt-compensated heading)
     #
-    operation_mode: "NDOF"
+    operation_mode: "IMU"
 
     # ── Feature Toggles ────────────────────────────────────────────────────
     # Publish calibration diagnostics on /bno055/status (1 Hz)

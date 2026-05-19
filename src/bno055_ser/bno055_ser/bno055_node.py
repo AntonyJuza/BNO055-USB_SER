@@ -12,6 +12,8 @@ Features
 * Magnetometer topic:   /bno055/mag         (sensor_msgs/MagneticField)
 * Temperature topic:    /bno055/temperature  (sensor_msgs/Temperature)
 * Diagnostics topic:    /bno055/status       (diagnostic_msgs/DiagnosticArray, 1 Hz)
+* Raw serial topics:    /bno055/raw         (std_msgs/String)
+                        /bno055/raw_values  (std_msgs/Float64MultiArray)
   – mode-aware calibration guidance messages
 * Calibration persistence: saves offsets on full calibration, restores on startup
 * Configurable update rate (the host-side read timer)
@@ -34,6 +36,10 @@ Published Topics
   /bno055/temperature  sensor_msgs/Temperature
   /bno055/status       diagnostic_msgs/DiagnosticArray
   /bno055/calibration  std_msgs/String  (JSON, 1 Hz — legacy compatibility)
+  /bno055/raw          std_msgs/String  (exact BNO CSV line from Arduino)
+  /bno055/raw_values   std_msgs/Float64MultiArray
+                       [qw,qx,qy,qz,gx,gy,gz,ax,ay,az,mx,my,mz,
+                        heading,roll,pitch,temp,cal_sys,cal_gyro,cal_accel,cal_mag]
 
 Parameters
 ----------
@@ -59,7 +65,7 @@ import time
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Imu, MagneticField, Temperature
-from std_msgs.msg import String
+from std_msgs.msg import Float64MultiArray, String
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 
 import serial
@@ -114,7 +120,7 @@ class BNO055Node(Node):
         self.frame_id      = self.get_parameter('frame_id').value
         self.update_rate   = float(self.get_parameter('update_rate').value)
         self.placement     = self.get_parameter('placement_axis_remap').value
-        self.cal_file      = self.get_parameter('cal_file').value
+        self.cal_file      = os.path.expanduser(self.get_parameter('cal_file').value)
         self.pub_diag      = self.get_parameter('publish_diagnostics').value
         self.pub_temp      = self.get_parameter('publish_temperature').value
         self.pub_mag       = self.get_parameter('publish_magnetometer').value
@@ -144,6 +150,9 @@ class BNO055Node(Node):
         # ── Publishers ───────────────────────────────────────────────────────
         self.imu_pub  = self.create_publisher(Imu,    '/bno055/imu', 10)
         self.cal_pub  = self.create_publisher(String, '/bno055/calibration', 10)
+        self.raw_pub = self.create_publisher(String, '/bno055/raw', 10)
+        self.raw_values_pub = self.create_publisher(
+            Float64MultiArray, '/bno055/raw_values', 10)
 
         self.mag_pub  = None
         if self.pub_mag and self.uses_mag:
@@ -227,6 +236,11 @@ class BNO055Node(Node):
         self.ser.write(cmd.encode())
         self.get_logger().info('Sent stored calibration offsets to Arduino.')
 
+    def _send_mode(self):
+        cmd = f"SET_MODE,{self.operation_mode}\n"
+        self.ser.write(cmd.encode())
+        self.get_logger().info(f'Sent operation mode to Arduino: {self.operation_mode}')
+
     def _parse_cal_offsets_line(self, line: str):
         try:
             parts = line.split(',')
@@ -278,6 +292,8 @@ class BNO055Node(Node):
                             time.sleep(0.1)
                             self._send_load_cal(saved)
                             self.fully_calibrated = True
+                        time.sleep(0.1)
+                        self._send_mode()
                         return True
                     elif 'BNO_ERROR' in line:
                         self.get_logger().error('BNO055 init failed! Check wiring.')
@@ -310,6 +326,9 @@ class BNO055Node(Node):
                 return
 
             if line.startswith('BNO,'):
+                raw_msg = String()
+                raw_msg.data = line
+                self.raw_pub.publish(raw_msg)
                 self._parse_and_publish(line)
             elif line.startswith('CAL_STATUS,'):
                 self._parse_calibration_status(line)
@@ -321,6 +340,8 @@ class BNO055Node(Node):
                 self._parse_cal_offsets_line(line)
             elif line == 'CAL_LOADED':
                 self.get_logger().info('Arduino confirmed: calibration offsets loaded.')
+            elif line.startswith('MODE_SET,'):
+                self.get_logger().info(f'Arduino confirmed: {line}')
             elif not line.startswith('BNO'):
                 self.get_logger().debug(f'Arduino: {line}')
 
@@ -371,6 +392,18 @@ class BNO055Node(Node):
         self._last_temp = temp
 
         stamp = self.get_clock().now().to_msg()
+
+        raw_values_msg = Float64MultiArray()
+        raw_values_msg.data = [
+            qw, qx, qy, qz,
+            gx, gy, gz,
+            ax, ay, az,
+            mx, my, mz,
+            ex, ey, ez,
+            temp,
+            float(cal_sys), float(cal_gyro), float(cal_accel), float(cal_mag),
+        ]
+        self.raw_values_pub.publish(raw_values_msg)
 
         # ── IMU message ────────────────────────────────────────────────────
         imu_msg = Imu()
@@ -479,7 +512,7 @@ class BNO055Node(Node):
             full_cal = ok
         elif not self.uses_mag:
             # Fusion without mag (IMU mode): ignore mag calibration
-            full_cal = sys_v == 3 and gyro_v == 3 and accel_v == 3
+            full_cal = gyro_v == 3 and accel_v == 3
         else:
             full_cal = sys_v == 3 and gyro_v == 3 and accel_v == 3 and mag_v == 3
 
@@ -497,12 +530,10 @@ class BNO055Node(Node):
             if not self.uses_mag:
                 if self.uses_gyro and gyro_v < 3:
                     status.message = 'Calibration incomplete — hold sensor still for gyroscope'
-                elif self.is_fusion and sys_v < 3:
-                    status.message = 'Sensors ready — waiting for fusion engine (sys), hold still'
                 elif self.uses_accel and accel_v < 3:
                     status.message = 'Calibration incomplete — slowly rotate sensor for accelerometer'
                 else:
-                    status.message = 'Calibration incomplete'
+                    status.message = 'Sensors ready'
             else:
                 if mag_v < 3:
                     status.message = 'Calibration incomplete — rotate sensor in figure-8 for magnetometer'
